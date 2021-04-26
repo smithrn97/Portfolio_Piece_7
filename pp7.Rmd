@@ -1,0 +1,111 @@
+---
+title: "Portfolio Piece 7: The 'Strongest' Democrats and Republicans (That Ran for Office in 2018)"
+author: "Rebecca Smith"
+date: "4/26/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For this piece, I'm following Elliott Morris' attempt to quantify evaluations that some popular Democrats are "better" than others.
+
+```{r load}
+library(tidyverse)
+library(politicaldata)
+library(dplyr)
+library(readr)
+library(pander)
+library(ggthemes)
+library(devtools)
+library(kableExtra)
+results_2018 <- read_csv("data/2019_03_01_2018_vs_partisanship.csv")
+View(results_2018)
+```
+
+Morris suggests that one way we can assess candidate strengths is by comparing their 2018 win margins to some calculated benchmark in the state. One calculation is to take the official's margin in 2018 election and subtract the partisan baseline of the state - a combined index of the past two presidential election margins - adjusted for the national environment.
+
+Below are the steps I took to create the kable table and subsequent graphic (thank you to Elliott Morris for teaching me the wonders of kable). 
+
+
+# compute partisan lean for each state
+```{r lean}
+pres <- politicaldata::pres_results
+
+pres <- pres %>%
+  filter(year %in% 2012:2016)
+
+pres <- pres %>%
+  select(state, year, dem, rep)
+
+pres <- pres %>%
+  gather(party, vote, 3:4) %>%
+  mutate(party = paste0(party,'.',year)) %>%
+  select(-year) %>%
+  spread(party,vote)
+
+pres <- pres %>%
+  mutate(partisan_lean = ((dem.2016 - rep.2016) - 0.021)*0.75 + ((dem.2012 = rep.2012) - 0.039)*0.25)
+```
+
+# benchmark in 2018 is partisan lean + 8.6 points for dems, so add that
+```{r bench}
+pres <- pres %>%
+  mutate(benchmark = partisan_lean + 0.086)
+```
+
+# join that with the 2018 results
+```{r join}
+results_benchmarked <- results_2018 %>%
+  left_join(pres,by='state')
+```
+
+# compute over/under-performance
+```{r compute}
+results_benchmarked <- results_benchmarked %>%
+  mutate(margin = dem-rep,
+         performance = margin - benchmark) %>%
+  arrange(desc(performance))
+```
+
+# kable table
+```{r table}
+results_benchmarked %>%
+  select(state, office, partisan_lean, performance) %>%
+  mutate(partisan_lean = round(partisan_lean * 100),
+         performance = round(performance*100)) %>%
+  knitr::kable("simple")
+```
+
+If you take a look at the table, you can see every Democrats' over/under-performance of their benchmark. 
+
+```{r look}
+view(results_benchmarked %>% select(state, office, partisan_lean, performance))
+
+medians <- results_benchmarked %>%
+  group_by(office) %>%
+  summarise(performance = median(performance))
+```
+
+We can aslo summarize this table as a density plot. The black dotted line is O'Rourke. Morris uses him as the comparison because he was repeatedly talked about as a strong Democrat. Based on the graphic below, we can see that he competes ~2 points ahead of the average Dem but the variance in over-performances means that's likely not significantly different. 
+
+# histogram
+```{r viz}
+results_gg <- ggplot(results_benchmarked, aes(x=performance, col=office, fill=office)) +
+  geom_vline(xintercept=0,linetype=2,col='gray40') +
+  geom_density(alpha=0.7) +
+  geom_vline(data=medians, aes(xintercept=performance,group=office,color=office)) +
+  scale_color_pander() + scale_fill_pander() +
+  labs(title="Statewide Democrats Underperformed Expectations in 2018",
+       subtitle="Across America, Democratic candidates - especially for governor - lagged behind\nstates' environment-adjusted partisan leans",
+       x="Democratic Margin Relative to Benchmark\n(Partisan Lean + National Margin)",
+       y="Density",
+       caption="Sources: Secretaries of State") +
+  scale_x_continuous(labels=function(x){x*100}) +
+  guides('fill' = guide_legend(title="Office"), color = FALSE)
+
+results_gg
+```
